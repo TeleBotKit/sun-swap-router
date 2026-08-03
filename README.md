@@ -70,7 +70,7 @@ const API_KEY = "<管理员分配给你的 X-API-KEY>";
 // 1. 构造 V4 swap 交易（返回未签名 transaction + feeEstimate + quote）
 const buildRes = await fetch(`${BASE_URL}/v4/build`, {
   method: "POST",
-  headers: { "Content-Type": "application/json" },
+  headers: { "Content-Type": "application/json", "X-API-KEY": API_KEY },
   body: JSON.stringify({
     ownerAddress: "TYourTronAddressBase58...",
     tokenIn: "USDT",
@@ -105,13 +105,9 @@ console.log(await broadcastRes.json());
 
 ## 鉴权
 
-| 场景 | 鉴权 |
-| ---- | ---- |
-| `/build` `/approve` `/quote` | 开放调用，无需鉴权 |
-| `/v2/broadcast` | 开放调用，不收费 |
-| `/v4/broadcast` | 必须携带 `X-API-KEY`（管理员手动分配，并与 Telegram 用户绑定） |
+所有接口默认均需鉴权：每个请求都必须携带 `X-API-KEY`（管理员手动分配，并与 Telegram 用户绑定），缺失或无效一律返回 HTTP 401。
 
-`X-API-KEY` 缺失或查不到对应用户一律返回 HTTP 401。手续费按该用户当月累计兑换量走[阶梯费率](#阶梯手续费)，从绑定账户余额扣除。
+手续费按该用户当月累计兑换量走[阶梯费率](#阶梯手续费)，从绑定账户余额扣除。
 
 ## 单笔限额
 
@@ -140,11 +136,11 @@ console.log(await broadcastRes.json());
 | `/v2/build` | GET/POST | 构造 SunSwap V2 swap 交易 |
 | `/v2/approve` | GET/POST | 构造 V2 前置授权（TRC20 approve → Router） |
 | `/v2/quote` | GET/POST | 查询 V2 兑换预估 |
-| `/v2/broadcast` | POST | 广播已签名交易（无需鉴权） |
+| `/v2/broadcast` | POST | 广播已签名交易 |
 | `/v4/build` | GET/POST | 构造 SunSwap V4（Universal Router）swap 交易 |
 | `/v4/approve` | GET/POST | 构造 V4 两步 Permit2 授权交易 |
 | `/v4/quote` | GET/POST | 查询 V4 兑换预估 |
-| `/v4/broadcast` | POST | 收费广播（`X-API-KEY`，按兑换量抽手续费） |
+| `/v4/broadcast` | POST | 收费广播（按兑换量抽手续费） |
 
 GET 用 query string，POST 用 JSON body，两种方式参数完全一样。
 
@@ -197,7 +193,6 @@ V2 与 V4 的关键差异：
 
 | | `/v2/broadcast` | `/v4/broadcast` |
 | ---- | ---- | ---- |
-| 鉴权 | 无 | `X-API-KEY`（必填） |
 | 收费 | 不收费 | 按兑换量抽手续费（见[阶梯手续费](#阶梯手续费)） |
 | 请求体 | 已签名交易（`raw_data` + `signature`） | 已签名 `transaction` + `feeEstimate` + `quote`（`/v4/build` 响应原样回传） |
 | 附加头 | - | `X-Auto-Energy`：广播前自动补齐能量和带宽 |
@@ -235,7 +230,7 @@ V2 与 V4 的关键差异：
 | ---- | ---- |
 | 200 | 成功，按各接口返回响应体 |
 | 400 | 参数错误/超限/补能量失败/烧 TRX 超限等，响应体含 `error` 与 `message` |
-| 401 | `X-API-KEY` 缺失或无效（仅 `/v4/broadcast`） |
+| 401 | `X-API-KEY` 缺失或无效 |
 | 404 | 接口路径不存在 |
 | 500 | 服务端内部异常 |
 
