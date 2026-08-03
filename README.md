@@ -34,7 +34,7 @@ SunSwap,TRON,兑换,swap,USDT,TRX,API,路由器,DeFi,TRC20
 | **全球网络** | 服务运行在全球边缘网络，响应快、可用性高；无需自建节点或维护 RPC |
 | **接入简单** | 一个 POST 接口传 `ownerAddress`/`tokenIn`/`tokenOut`/`amountIn`，即返回签名后可上链的交易 |
 | **智能路由** | 自动寻找最优兑换路径；V2 查询失败自动降级兜底，报价稳定 |
-| **自动补资源** | 广播前可自动补齐能量和带宽（`X-Auto-Energy`），避免账户资源不足时白烧 TRX |
+| **自动补资源** | 提交前可自动补齐能量和带宽（`X-Auto-Energy`），避免账户资源不足时白烧 TRX |
 | **收费透明** | 按当月累计兑换量阶梯计费，整单切换；每笔广播都有完整流水记录，便于核对与对账 |
 
 ## 应用场景
@@ -42,7 +42,7 @@ SunSwap,TRON,兑换,swap,USDT,TRX,API,路由器,DeFi,TRC20
 - **钱包 / DApp 内置兑换**：输入金额实时显示预估（`/quote`），一键构造（`/build`）、签名、广播。
 - **Telegram 机器人 / 应用内兑换**：在机器人或应用内直接完成 USDT ↔ TRX 兑换，余额自动结算。
 - **交易所 / OTC 出入金**：统一的 TRX/USDT 兑换入口，业务侧只对接 HTTP。
-- **批量 / 自动兑换服务**：程序化构造大量兑换交易，V4 自动补能量和带宽，减少白烧手续费。
+- **批量 / 自动兑换服务**：程序化构造大量兑换交易，V4 自动补能量和带宽，减少白烧 TRX。
 
 ## 工作原理
 
@@ -52,16 +52,16 @@ SunSwap,TRON,兑换,swap,USDT,TRX,API,路由器,DeFi,TRC20
    │  1. POST /v2|v4/build ───────────> │  构造 swap 交易，返回可签名交易         │
    │  2. 返回未签名 transaction          │  （不碰私钥、不广播）                    │
    │  3. 本地签名（私钥只在本机）        │                                          │
-   │  4. POST /v4/broadcast ───────────> │  鉴权 → 算手续费 →（可选）补资源 → 广播  │
-   │                                    │  5. 转发广播 ──────────────────────────> │
-   │                                    │  6. 广播成功，手续费自动扣除             │
+   │  4. POST /v4/broadcast ───────────> │  鉴权 →（可选）补足能量/带宽 → 提交     │
+   │                                    │  5. 提交到 TRON 节点 ──────────────────> │
+   │                                    │  6. 交易生效                            │
 ```
 
 ## 快速开始
 
 Base URL：**开通服务后由我们告知**——为保障服务安全，接口地址不在公开文档中展示；完成开通后随 `X-API-KEY` 一起提供。
 
-下面是一个完整的 V4 兑换流程示例（Node.js）：构造 → 本地签名 → 收费广播。
+下面是一个完整的 V4 兑换流程示例（Node.js）：构造 → 本地签名 → 提交上链。
 
 ```js
 const BASE_URL = "<开通服务后由我们提供的接口地址>";
@@ -84,7 +84,7 @@ const built = await buildRes.json();
 //    —— 私钥始终只出现在您的环境里
 const signedTx = await tronWeb.trx.sign(built.transaction);
 
-// 3. 收费广播：回传 transaction + feeEstimate + quote，带 X-API-KEY
+// 3. 提交广播：回传 transaction + feeEstimate + quote，带 X-API-KEY
 const broadcastRes = await fetch(`${BASE_URL}/v4/broadcast`, {
   method: "POST",
   headers: {
@@ -98,7 +98,7 @@ const broadcastRes = await fetch(`${BASE_URL}/v4/broadcast`, {
   }),
 });
 console.log(await broadcastRes.json());
-// => { "ok": true, "result": true, "txid": "...", "fee": { "charged": true, ... } }
+// => { "ok": true, "result": true, "txid": "..." }
 ```
 
 > 也可以只用 `/quote` 查价、`/build` 构造交易，然后自行签名广播。
@@ -107,11 +107,11 @@ console.log(await broadcastRes.json());
 
 所有接口默认均需鉴权：每个请求都必须携带 `X-API-KEY`（管理员手动分配，并与 Telegram 用户绑定），缺失或无效一律返回 HTTP 401。
 
-手续费按该用户当月累计兑换量走[阶梯费率](#阶梯手续费)，从绑定账户余额扣除。
+手续费按该用户当月累计兑换量走[阶梯费率](#阶梯手续费)计收。
 
 ## 单笔限额
 
-`tokenIn` 为 **TRX 或 USDT** 时，单笔兑换金额必须落在以下闭区间内（其它 TRC20 不受限制，可自由构造/查询，但不参与收费广播）：
+`tokenIn` 为 **TRX 或 USDT** 时，单笔兑换金额必须落在以下闭区间内（其它 TRC20 不受限制，可自由构造/查询）：
 
 | tokenIn | 下限 | 上限 |
 | ---- | ---- | ---- |
@@ -132,7 +132,6 @@ console.log(await broadcastRes.json());
 
 | 接口 | 方法 | 说明 |
 | ---- | ---- | ---- |
-| `/` | GET | 健康检查 + 路由发现 |
 | `/v2/build` | GET/POST | 构造 SunSwap V2 swap 交易 |
 | `/v2/approve` | GET/POST | 构造 V2 前置授权（TRC20 approve → Router） |
 | `/v2/quote` | GET/POST | 查询 V2 兑换预估 |
@@ -140,13 +139,9 @@ console.log(await broadcastRes.json());
 | `/v4/build` | GET/POST | 构造 SunSwap V4（Universal Router）swap 交易 |
 | `/v4/approve` | GET/POST | 构造 V4 两步 Permit2 授权交易 |
 | `/v4/quote` | GET/POST | 查询 V4 兑换预估 |
-| `/v4/broadcast` | POST | 收费广播（按兑换量抽手续费） |
+| `/v4/broadcast` | POST | 将已签名交易提交到全球 TRON 节点使其生效，提交前进行智能带宽/能量补足 |
 
 GET 用 query string，POST 用 JSON body，两种方式参数完全一样。
-
-### GET /
-
-健康检查 + 路由发现。返回 `{ "ok": true, "service": "sun-swap-router", "routes": {...} }`，直接用浏览器打开服务域名即可确认服务是否在线。
 
 ### 构造交易：GET/POST /v2/build · /v4/build
 
@@ -193,13 +188,10 @@ V2 与 V4 的关键差异：
 
 | | `/v2/broadcast` | `/v4/broadcast` |
 | ---- | ---- | ---- |
-| 收费 | 不收费 | 按兑换量抽手续费（见[阶梯手续费](#阶梯手续费)） |
 | 请求体 | 已签名交易（`raw_data` + `signature`） | 已签名 `transaction` + `feeEstimate` + `quote`（`/v4/build` 响应原样回传） |
-| 附加头 | - | `X-Auto-Energy`：广播前自动补齐能量和带宽 |
+| 附加头 | - | `X-Auto-Energy`：提交前自动补齐能量和带宽 |
 
-**处理顺序（`/v4/broadcast`）**：校验 `X-API-KEY` → 校验请求体 → 算手续费 →（可选）补资源 → 转发广播 → **广播成功后再扣款**（扣款失败不影响已上链交易，响应 `fee.charged: false`，留待对账）。
-
-> ⚠️ 广播是**先成功、后扣费**：交易一旦上链不可逆，扣款失败不会回滚。响应里 `fee.charged` 单独反映扣款是否成功，请勿与广播本身的成败混在一起判断。
+**处理流程（`/v4/broadcast`）**：校验 `X-API-KEY` → 校验请求体 →（可选）智能补足带宽/能量 → 将交易提交到全球 TRON 节点使其生效。
 
 ## 阶梯手续费
 
@@ -240,19 +232,16 @@ V2 与 V4 的关键差异：
 build 返回的未签名交易有效期很短（约 60 秒）。build → 签名 → 广播间隔太久会过期——不是 bug，是 TRON 协议本身的行为。重新 build 一次拿新鲜交易即可，建议整条流程写成自动化脚本。
 
 **`/v4/broadcast` 为什么要求回传 `feeEstimate`/`quote`？**
-手续费按 `quote.tokenIn`/`amountIn` 计算、补资源按 `feeEstimate` 计算。为保障计费准确，接口会对请求体做二次校验（单笔限额、代币类型等），超限/不支持直接拒绝，在广播之前拦截。
-
-**`fee.charged: false` 是什么意思？**
-广播已成功上链，但手续费扣款失败（例如余额不足）。服务已交付、交易不回滚，该记录会单独标记，供后续对账。
+`feeEstimate` 用于评估这笔交易需要的能量/带宽，`quote` 用于校验兑换参数。为保障交易正确提交，接口会对请求体做二次校验（单笔限额、代币类型等），超限/不支持直接拒绝，在提交之前拦截。
 
 **`energy_topup_failed` 怎么办？**
 只在带 `X-Auto-Energy` 时可能出现，此时交易**没有被广播**。按 `reason` 分支：`purchase_failed`（最常见：账户余额不足，或尚未开通补资源服务——联系管理员）；`exceeds_limit`（请求体里的 `feeEstimate` 被改过）；`not_delivered`（买到了但没等到账，钱已花、能量已归你，重新签一笔交易再发即可）。
 
-**自动补资源（`X-Auto-Energy`）是怎么收费的？**
-广播前会自动补齐能量和带宽，相关费用与 swap 手续费分别计费、独立扣除。能量补不上**中止广播**；带宽补不上**照常广播**，只在 `bandwidthTopup.failReason` 里如实报告。
+**自动补资源（`X-Auto-Energy`）是什么？**
+提交前会自动补齐能量和带宽，避免账户资源不足导致交易变慢或额外消耗。能量补不上**中止提交**；带宽补不上**照常提交**，只在 `bandwidthTopup.failReason` 里如实报告。
 
 **支持哪些代币？**
-构造与查询（build/quote）支持任意 TRC20 + TRX；收费广播（`/v4/broadcast`）只支持 **TRX/USDT** 计价，其它代币因算不出手续费会被拒绝。
+构造与查询（build/quote）支持任意 TRC20 + TRX；提交上链（`/v4/broadcast`）目前只支持 **TRX/USDT**。
 
 **私钥安全吗？**
 安全。服务不接触、不保存任何私钥，只返回未签名交易；签名永远在您自己的环境完成。build 接口也不接受 `router`/`path`/`spender` 等字段——交易只能导向内置的官方 Router，防钓鱼授权。
